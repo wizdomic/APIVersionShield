@@ -1,13 +1,39 @@
-version: "3.8"
+version: '3.9'
 
 services:
-  apiguard:
+  db:
+    image: postgres:16-alpine
+    container_name: apiguard-db
+    environment:
+      POSTGRES_DB: apiguard
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d apiguard"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
     build: .
-    container_name: apiguard
+    container_name: apiguard-app
     ports:
       - "8080:8080"
     environment:
-      - SPRING_PROFILES_ACTIVE=prod
+      DB_URL: jdbc:postgresql://db:5432/apiguard
+      DB_USERNAME: ${DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_DRIVER: org.postgresql.Driver
+      DB_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      APIGUARD_API_KEY: ${APIGUARD_API_KEY:-dev-secret-key}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
 
-
-# here add your services to compare as for now  !! or you can use swagger if want manual
+volumes:
+  postgres_data:
