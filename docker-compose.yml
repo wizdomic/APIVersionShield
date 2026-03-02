@@ -1,0 +1,13 @@
+version: "3.8"
+
+services:
+  apiguard:
+    build: .
+    container_name: apiguard
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=prod
+
+
+# here add your services to compare as for now  !! or you can use swagger if want manual

@@ -1,157 +1,110 @@
-# APIVersionShield – API Contract Guard for Safe Deployments
+# APIGuard
 
-## Project Overview
+**API Contract Validation Microservice**  
+Java 21 · Spring Boot 3.2 · PostgreSQL
 
-**APIVersionShield** is a Spring Boot–based **API contract validation microservice** designed to prevent breaking API changes during deployments.
+APIGuard is a deployment gate microservice that compares JSON schemas between API versions and returns a structured deployment decision:
 
-It acts as a **pre-deployment guard** in CI/CD pipelines by comparing API versions and blocking deployments that introduce backward-incompatible changes.
+- ✅ `SAFE_TO_DEPLOY`
+- ⚠️ `WARN_ONLY`
+- ❌ `BLOCK_DEPLOYMENT`
 
-### Problem
-
-API version upgrades can silently break existing clients when fields are removed or modified, leading to production failures.
-
-### Solution
-
-APIVersionShield validates versioned API contracts and determines whether a new version is **safe to deploy** or should **block deployment**.
+This ensures breaking API changes are detected **before** a release goes live.
 
 ---
 
-## Key Features
+## 🚀 Overview
 
-* **Versioned API Contracts**
-  Upload and manage multiple API versions using JSON Schema.
+APIGuard performs deep JSON schema comparisons to detect breaking changes such as:
 
-* **Payload Validation**
-  Validate request payloads against a specific API version.
+- Required field removal
+- Property type changes (e.g., `string → integer`)
+- Format changes (e.g., `email → date`)
 
-* **Backward Compatibility Guard**
-  Compare two API versions and detect breaking changes.
-
-* **CI/CD Deployment Gate**
-  Return clear decisions:
-
-    * `SAFE_TO_DEPLOY`
-    * `BLOCK_DEPLOYMENT`
-
-* **Standalone or Integrable**
-  Can run independently or alongside other microservices.
-
-* **Swagger UI Support**
-  Easy manual testing and demonstration.
-
-* **Docker & Docker Compose Ready**
-  Simple local and CI execution.
+All violations are collected before returning a final deployment decision.
 
 ---
 
-## High-Level Architecture
+## 🧠 Core Features
 
-```
-CI Pipeline / Developer
-        |
-        v
-  APIVersionShield
-        |
-        v
-Contract Comparison Engine
-        |
-        v
-SAFE_TO_DEPLOY / BLOCK_DEPLOYMENT
-```
+### Schema Diff Engine
+- Deep comparison of JSON schemas
+- Detects breaking and non-breaking changes
+- Aggregates all violations before computing final status
 
-* Operates **before deployment**
-* Does **not intercept runtime traffic**
-* Designed for **CI/CD and pre-release checks**
+### Deployment Decision Engine
+Returns one of:
+- `SAFE_TO_DEPLOY`
+- `WARN_ONLY`
+- `BLOCK_DEPLOYMENT`
 
----
+### Audit Trail
+Every guard check is persisted to PostgreSQL, including:
+- API versions compared
+- Decision result
+- Detailed reasoning
+- Timestamp
 
-## Typical Workflow
+All records are queryable via REST endpoints.
 
-1. Upload API contracts (v1, v2, v3…)
-2. Validate payloads against a chosen version
-3. Run guard checks between versions
-4. Receive deployment decision
-5. CI pipeline proceeds or fails
-
----
-
-## CI/CD Pre-Deployment Simulation
-
-```bash
-RESPONSE=$(curl -s -X POST http://localhost:8080/guard/check \
-  -H "Content-Type: application/json" \
-  -d '{ "from": "v2", "to": "v3" }')
-
-echo "$RESPONSE"
-
-if echo "$RESPONSE" | grep -q BLOCK_DEPLOYMENT; then
-  echo "❌ Deployment blocked"
-  exit 1
-else
-  echo "✅ Safe to deploy"
-fi
-```
-
-This simulates how a real CI pipeline would block a release automatically.
+### Security
+- API key authentication
+- Stateless `OncePerRequestFilter`
+- Designed for machine-to-machine CI/CD environments
+- Implemented using Spring Security
 
 ---
 
-## Running with Docker Compose
+## 🧪 Testing
 
-```bash
-docker compose up --build
-```
+### Unit Tests
+- Mockito
+- Covers all deployment decision paths
 
-* APIVersionShield runs as a container
-* Can be extended to run alongside other services
-* Same setup works locally and in CI runners
-
----
-
-## How It Can Be Used
-
-### Standalone Mode
-
-* Developers use Swagger UI
-* Manually upload contracts
-* Run validation and guard checks
-
-### Integrated Mode
-
-* CI/CD pipeline calls APIVersionShield
-* Deployment is gated by contract compatibility
-* Services remain loosely coupled
+### Integration Tests
+- `@SpringBootTest`
+- MockMvc for full HTTP stack testing
+- H2 in-memory database for isolated test runs
 
 ---
 
-## Limitations (Intentional for v1)
+## 🏗 Production-Ready Patterns
 
-* Contracts stored database persistent storage(supabase)
-* Manual contract upload
-* No authentication or authorization
-* JSON payloads only
-* CI/CD integration simulated via shell scripts
-
----
-
-## Future Enhancements
-
-* Authentication and RBAC
-* GitHub Actions / Jenkins plugins
-* Breaking-change diff visualization
-* Multi-service contract registry
+- `@Transactional` on all service methods
+  - `readOnly = true` for read operations
+- Constructor-based dependency injection
+- Environment variable-based configuration
+- Structured logging with SLF4J
 
 ---
 
-## Tech Stack
+## 🛠 Tech Stack
 
-* **Java 21**
-* **Spring Boot**
-* **Postgresql**
-* **JSON Schema (NetworkNT Validator)**
-* **Swagger / OpenAPI**
-* **Docker & Docker Compose**
+- Java 21
+- Spring Boot 3.2
+- Spring Security
+- Spring Data JPA / Hibernate
+- PostgreSQL (JSONB)
+- H2 (testing)
+- Mockito
+- MockMvc
+- networknt JSON Schema Validator
+- Maven
+- Git
+- Swagger / OpenAPI
+- Lombok
+- Supabase
 
----# APIVersionShield
-# APIVersionShield
-# APIVersionShield
+---
+
+## 💻 Technical Skills
+
+| Category     | Skills |
+|--------------|--------|
+| **Languages** | Java 21, SQL |
+| **Frameworks** | Spring Boot, Spring Security, Spring Data JPA, Hibernate |
+| **Databases** | PostgreSQL (JSONB), H2 |
+| **Testing** | JUnit 5, Mockito, MockMvc, `@SpringBootTest` |
+| **Tools** | Maven, Git, Swagger/OpenAPI, Lombok, Supabase |
+
+--- 
