@@ -33,8 +33,7 @@ POST /guard/check          →  APIGuard compares both
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/apiguard.git
-cd apiguard
+git clone https://github.com/wizdomic/APIVersionShield.git
 ```
 
 ### 2. Create your environment file
