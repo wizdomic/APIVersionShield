@@ -1,3 +1,5 @@
+//create application.properties inside the same directory as it's and copy all and edit with your configuration and use docker-compose
+
 spring.application.name=ApiGuard
 
 spring.datasource.url=
