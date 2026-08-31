@@ -4,6 +4,19 @@
 
 ---
 
+## ⚠️ Current Status
+
+| Feature | Status |
+|---|---|
+| Multi-project contract guard | ✅ Active |
+| Auto-baseline management | ✅ Active |
+| SAFE / WARN / BLOCK decisions | ✅ Active |
+| Force accept breaking changes | ✅ Active |
+| Project isolation | ✅ Active |
+| Audit log | 🚧 Temporarily disabled — coming back in next release |
+
+---
+
 ## How It Works
 
 ```
@@ -11,8 +24,8 @@ POST /guard/check  { projectId, schema }
          ↓
 No baseline exists?  →  store schema as baseline  →  SAFE_TO_DEPLOY
 Baseline exists?     →  compare against baseline
-                     →  SAFE_TO_DEPLOY  →  new schema becomes baseline
-                     →  WARN_ONLY       →  new schema becomes baseline
+                     →  SAFE_TO_DEPLOY   →  new schema becomes baseline
+                     →  WARN_ONLY        →  new schema becomes baseline
                      →  BLOCK_DEPLOYMENT →  old baseline kept, pipeline fails
 ```
 
@@ -45,15 +58,19 @@ Each project has its own independent baseline. Projects never compare against ea
 
 ---
 
-## Setup (5 minutes)
+## Database Options
+
+APIGuard works with any PostgreSQL instance. Choose one:
+
+---
+
+### Option A — Docker Compose (built-in PostgreSQL)
+
+The default setup spins up a local PostgreSQL container alongside the app.
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/apiguard.git
-cd apiguard
 cp .env.example .env
 ```
-
-Edit `.env`:
 
 ```env
 DB_URL=jdbc:postgresql://db:5432/apiguard
@@ -65,6 +82,74 @@ APIGUARD_API_KEY=your-secret-api-key
 ```
 
 ```bash
+docker-compose up --build
+```
+
+The `db:5432` hostname refers to the PostgreSQL container inside Docker Compose. No external DB needed.
+
+---
+
+### Option B — Supabase
+
+1. Go to [supabase.com](https://supabase.com) → create a project
+2. Go to **Settings → Database → Connection string → URI**
+3. Copy the connection string — it looks like:
+
+```
+postgresql://postgres.[ref]:[password]@aws-0-ap-south-1.pooler.supabase.com:6543/postgres
+```
+
+4. Convert it to JDBC format for your `.env`:
+
+```env
+DB_URL=jdbc:postgresql://aws-0-ap-south-1.pooler.supabase.com:6543/postgres?sslmode=require
+DB_USERNAME=postgres.[your-ref]
+DB_PASSWORD=your-supabase-db-password
+DB_DRIVER=org.postgresql.Driver
+DB_DIALECT=org.hibernate.dialect.PostgreSQLDialect
+APIGUARD_API_KEY=your-secret-api-key
+```
+
+> **Note:** Use port `6543` (transaction pooler), not `5432`. Add `?sslmode=require` to the URL.
+
+5. Since you're using an external DB, run only the app — not the full compose stack:
+
+```bash
+docker-compose up app --build
+```
+
+Or run locally:
+
+```bash
+export $(cat .env | xargs) && ./mvnw spring-boot:run
+```
+
+---
+
+### Option C — Any other PostgreSQL
+
+Works with Railway, Render, Neon, AWS RDS, or any self-hosted PostgreSQL.
+
+```env
+DB_URL=jdbc:postgresql://your-host:5432/your-database?sslmode=require
+DB_USERNAME=your-username
+DB_PASSWORD=your-password
+DB_DRIVER=org.postgresql.Driver
+DB_DIALECT=org.hibernate.dialect.PostgreSQLDialect
+APIGUARD_API_KEY=your-secret-api-key
+```
+
+APIGuard uses `spring.jpa.hibernate.ddl-auto=update` — it creates tables automatically on first startup. No manual SQL setup needed.
+
+---
+
+## Setup (5 minutes)
+
+```bash
+git clone https://github.com/YOUR_USERNAME/apiguard.git
+cd apiguard
+cp .env.example .env
+# edit .env with your chosen database option above
 docker-compose up --build
 ```
 
@@ -122,15 +207,13 @@ GitHub Secrets to configure:
 | `APIGUARD_URL` | where APIGuard is running |
 | `APIGUARD_API_KEY` | same as your `.env` |
 
-That's it. No version management. No `CURRENT_VERSION`. APIGuard handles the baseline internally.
-
 ---
 
 ## API Reference
 
 All endpoints require `X-API-Key` header.
 
-### Guard Check (main endpoint)
+### Guard Check
 
 ```
 POST /guard/check
@@ -150,20 +233,9 @@ POST /guard/check
 }
 ```
 
-Response:
-```json
-{
-  "decision": "BLOCK_DEPLOYMENT",
-  "reason": "Breaking changes detected",
-  "changes": ["Property removed: 'email'"]
-}
-```
-
 ---
 
 ### Force Accept a Breaking Change
-
-When you intentionally want a breaking schema to become the new baseline:
 
 ```
 POST /contracts/accept
@@ -210,17 +282,6 @@ POST /contracts/validate?projectId=project-a
 POST /contracts/validate?projectId=project-a&version=1.0.0
 ```
 
-Validates a request payload against the project baseline (or a specific version).
-
----
-
-### Audit Log
-
-```
-GET /guard/audit                     ← all checks
-GET /guard/audit?projectId=project-a ← filtered by project
-```
-
 ---
 
 ## Swagger UI
@@ -259,22 +320,6 @@ All use the same APIGuard URL and API key. Baselines are completely isolated.
 
 ---
 
-## Using Your Own PostgreSQL (no Docker Compose DB)
-
-```env
-DB_URL=jdbc:postgresql://your-host:5432/your-database
-DB_USERNAME=your-username
-DB_PASSWORD=your-password
-```
-
-Then run only the app container:
-
-```bash
-docker run -p 8080:8080 --env-file .env yourusername/apiguard:latest
-```
-
----
-
 ## Running Tests
 
 ```bash
@@ -292,16 +337,16 @@ docker-compose down -v    # stop + delete database volume
 
 ---
 
-## Environment Variables
+## Environment Variables Reference
 
-| Variable | Description |
-|---|---|
-| `DB_URL` | PostgreSQL JDBC URL |
-| `DB_USERNAME` | Database username |
-| `DB_PASSWORD` | Database password |
-| `DB_DRIVER` | `org.postgresql.Driver` |
-| `DB_DIALECT` | `org.hibernate.dialect.PostgreSQLDialect` |
-| `APIGUARD_API_KEY` | Secret key for all API requests |
+| Variable | Description | Example |
+|---|---|---|
+| `DB_URL` | PostgreSQL JDBC URL | `jdbc:postgresql://db:5432/apiguard` |
+| `DB_USERNAME` | Database username | `postgres` |
+| `DB_PASSWORD` | Database password | `strongpassword` |
+| `DB_DRIVER` | JDBC driver class | `org.postgresql.Driver` |
+| `DB_DIALECT` | Hibernate dialect | `org.hibernate.dialect.PostgreSQLDialect` |
+| `APIGUARD_API_KEY` | Secret key for all API requests | `my-secret-key` |
 
 ---
 
