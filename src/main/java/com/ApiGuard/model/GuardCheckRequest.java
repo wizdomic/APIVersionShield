@@ -1,6 +1,8 @@
 package com.ApiGuard.model;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -8,9 +10,9 @@ import lombok.Setter;
 @Setter
 public class GuardCheckRequest {
 
-    @NotBlank(message = "'from' version must not be blank")
-    private String from;
+    @NotBlank(message = "projectId must not be blank")
+    private String projectId;
 
-    @NotBlank(message = "'to' version must not be blank")
-    private String to;
+    @NotNull(message = "schema must not be null")
+    private JsonNode schema;
 }

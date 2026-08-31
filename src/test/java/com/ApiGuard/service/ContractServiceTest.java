@@ -6,11 +6,13 @@ import com.ApiGuard.model.ApiContract;
 import com.ApiGuard.model.DeploymentDecision;
 import com.ApiGuard.model.GuardCheckResponse;
 import com.ApiGuard.repository.ApiContractRepository;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -33,135 +35,191 @@ class ContractServiceTest {
 
         when(auditLogRepository.save(any(GuardAuditLog.class)))
                 .thenAnswer(i -> i.getArgument(0));
+        when(contractRepository.save(any(ApiContract.class)))
+                .thenAnswer(i -> i.getArgument(0));
     }
 
-    private ApiContract buildContract(String version, String schemaJson) throws Exception {
+    private JsonNode schema(String json) throws Exception {
+        return objectMapper.readTree(json);
+    }
+
+    private ApiContract baseline(String projectId, String schemaJson) throws Exception {
         ApiContract c = new ApiContract();
-        c.setVersion(version);
+        c.setProjectId(projectId);
+        c.setVersion("v-existing");
         c.setSchema(objectMapper.readTree(schemaJson));
+        c.setBaseline(true);
+        c.setCreatedAt(LocalDateTime.now());
         return c;
     }
 
-    // ─── evaluateDeployment ──────────────────────────────────────────────────
+    // ─── First schema ──────────────────────────────────────────────────────────
 
     @Test
-    void shouldReturnSafeWhenNoChanges() throws Exception {
-        String schema = """
-                {"type":"object","required":["name"],"properties":{"name":{"type":"string"}}}
-                """;
-        ApiContract v1 = buildContract("1.0.0", schema);
-        ApiContract v2 = buildContract("2.0.0", schema);
+    void shouldRegisterFirstSchemaAsBaselineAndReturnSafe() throws Exception {
+        when(contractRepository.findByProjectIdAndBaselineTrue("project-a"))
+                .thenReturn(Optional.empty());
 
-        when(contractRepository.findByVersion("1.0.0")).thenReturn(Optional.of(v1));
-        when(contractRepository.findByVersion("2.0.0")).thenReturn(Optional.of(v2));
+        JsonNode s = schema("{\"type\":\"object\",\"required\":[\"name\"],\"properties\":{\"name\":{\"type\":\"string\"}}}");
+        GuardCheckResponse response = service.guardCheck("project-a", s);
 
-        GuardCheckResponse response = service.evaluateDeployment("1.0.0", "2.0.0");
         assertEquals(DeploymentDecision.SAFE_TO_DEPLOY, response.getDecision());
+        verify(contractRepository, times(1)).save(any(ApiContract.class));
     }
 
+    // ─── SAFE ──────────────────────────────────────────────────────────────────
+
     @Test
-    void shouldBlockWhenRequiredFieldRemoved() throws Exception {
-        ApiContract v1 = buildContract("1.0.0",
-                """
-                {"type":"object","required":["name","email"],"properties":{"name":{"type":"string"},"email":{"type":"string"}}}
-                """);
-        ApiContract v2 = buildContract("2.0.0",
-                """
-                {"type":"object","required":["name"],"properties":{"name":{"type":"string"}}}
-                """);
+    void shouldReturnSafeAndPromoteBaselineWhenNoChanges() throws Exception {
+        String schemaJson = "{\"type\":\"object\",\"required\":[\"name\"],\"properties\":{\"name\":{\"type\":\"string\"}}}";
+        ApiContract existing = baseline("project-a", schemaJson);
+        when(contractRepository.findByProjectIdAndBaselineTrue("project-a"))
+                .thenReturn(Optional.of(existing));
 
-        when(contractRepository.findByVersion("1.0.0")).thenReturn(Optional.of(v1));
-        when(contractRepository.findByVersion("2.0.0")).thenReturn(Optional.of(v2));
+        GuardCheckResponse response = service.guardCheck("project-a", schema(schemaJson));
 
-        GuardCheckResponse response = service.evaluateDeployment("1.0.0", "2.0.0");
+        assertEquals(DeploymentDecision.SAFE_TO_DEPLOY, response.getDecision());
+        // old baseline unset + new baseline saved = 2 saves
+        verify(contractRepository, times(2)).save(any(ApiContract.class));
+    }
+
+    // ─── WARN → baseline updated ───────────────────────────────────────────────
+
+    @Test
+    void shouldWarnAndPromoteBaselineOnNonBreakingChange() throws Exception {
+        ApiContract existing = baseline("project-a",
+                "{\"type\":\"object\",\"required\":[\"name\"],\"properties\":{\"name\":{\"type\":\"string\"}}}");
+        when(contractRepository.findByProjectIdAndBaselineTrue("project-a"))
+                .thenReturn(Optional.of(existing));
+
+        JsonNode newSchema = schema(
+                "{\"type\":\"object\",\"required\":[\"name\",\"phone\"],\"properties\":{\"name\":{\"type\":\"string\"},\"phone\":{\"type\":\"string\"}}}");
+        GuardCheckResponse response = service.guardCheck("project-a", newSchema);
+
+        assertEquals(DeploymentDecision.WARN_ONLY, response.getDecision());
+        // WARN also promotes baseline
+        verify(contractRepository, times(2)).save(any(ApiContract.class));
+    }
+
+    // ─── BLOCK → baseline unchanged ────────────────────────────────────────────
+
+    @Test
+    void shouldBlockAndKeepOldBaselineOnBreakingChange() throws Exception {
+        ApiContract existing = baseline("project-a",
+                "{\"type\":\"object\",\"required\":[\"name\",\"email\"],\"properties\":{\"name\":{\"type\":\"string\"},\"email\":{\"type\":\"string\"}}}");
+        when(contractRepository.findByProjectIdAndBaselineTrue("project-a"))
+                .thenReturn(Optional.of(existing));
+
+        JsonNode breaking = schema(
+                "{\"type\":\"object\",\"required\":[\"name\"],\"properties\":{\"name\":{\"type\":\"string\"}}}");
+        GuardCheckResponse response = service.guardCheck("project-a", breaking);
+
         assertEquals(DeploymentDecision.BLOCK_DEPLOYMENT, response.getDecision());
         assertTrue(response.getChanges().stream().anyMatch(c -> c.contains("email")));
+        // BLOCK — contractRepository.save never called (only auditLogRepository)
+        verify(contractRepository, never()).save(any(ApiContract.class));
     }
 
+    // ─── Type change → BLOCK ───────────────────────────────────────────────────
+
     @Test
-    void shouldBlockWhenFieldTypeChanges() throws Exception {
-        ApiContract v1 = buildContract("1.0.0",
-                """
-                {"type":"object","required":["age"],"properties":{"age":{"type":"string"}}}
-                """);
-        ApiContract v2 = buildContract("2.0.0",
-                """
-                {"type":"object","required":["age"],"properties":{"age":{"type":"integer"}}}
-                """);
+    void shouldBlockOnTypeChange() throws Exception {
+        ApiContract existing = baseline("project-a",
+                "{\"type\":\"object\",\"required\":[\"age\"],\"properties\":{\"age\":{\"type\":\"string\"}}}");
+        when(contractRepository.findByProjectIdAndBaselineTrue("project-a"))
+                .thenReturn(Optional.of(existing));
 
-        when(contractRepository.findByVersion("1.0.0")).thenReturn(Optional.of(v1));
-        when(contractRepository.findByVersion("2.0.0")).thenReturn(Optional.of(v2));
+        JsonNode changed = schema(
+                "{\"type\":\"object\",\"required\":[\"age\"],\"properties\":{\"age\":{\"type\":\"integer\"}}}");
+        GuardCheckResponse response = service.guardCheck("project-a", changed);
 
-        GuardCheckResponse response = service.evaluateDeployment("1.0.0", "2.0.0");
         assertEquals(DeploymentDecision.BLOCK_DEPLOYMENT, response.getDecision());
-        assertTrue(response.getChanges().stream().anyMatch(c -> c.contains("string") && c.contains("integer")));
+        assertTrue(response.getChanges().stream()
+                .anyMatch(c -> c.contains("string") && c.contains("integer")));
     }
 
-    @Test
-    void shouldWarnWhenNewRequiredFieldAdded() throws Exception {
-        ApiContract v1 = buildContract("1.0.0",
-                """
-                {"type":"object","required":["name"],"properties":{"name":{"type":"string"}}}
-                """);
-        ApiContract v2 = buildContract("2.0.0",
-                """
-                {"type":"object","required":["name","phone"],"properties":{"name":{"type":"string"},"phone":{"type":"string"}}}
-                """);
-
-        when(contractRepository.findByVersion("1.0.0")).thenReturn(Optional.of(v1));
-        when(contractRepository.findByVersion("2.0.0")).thenReturn(Optional.of(v2));
-
-        GuardCheckResponse response = service.evaluateDeployment("1.0.0", "2.0.0");
-        assertEquals(DeploymentDecision.WARN_ONLY, response.getDecision());
-    }
-
-    @Test
-    void shouldBlockWhenContractNotFound() {
-        when(contractRepository.findByVersion(any())).thenReturn(Optional.empty());
-        GuardCheckResponse response = service.evaluateDeployment("1.0.0", "9.9.9");
-        assertEquals(DeploymentDecision.BLOCK_DEPLOYMENT, response.getDecision());
-    }
+    // ─── All changes collected ──────────────────────────────────────────────────
 
     @Test
     void shouldCollectAllBreakingChangesNotJustFirst() throws Exception {
-        ApiContract v1 = buildContract("1.0.0",
-                """
-                {"type":"object","required":["name","email"],"properties":{"name":{"type":"string"},"email":{"type":"string"}}}
-                """);
-        ApiContract v2 = buildContract("2.0.0",
-                """
-                {"type":"object","required":[],"properties":{"name":{"type":"integer"}}}
-                """);
+        ApiContract existing = baseline("project-a",
+                "{\"type\":\"object\",\"required\":[\"name\",\"email\"],\"properties\":{\"name\":{\"type\":\"string\"},\"email\":{\"type\":\"string\"}}}");
+        when(contractRepository.findByProjectIdAndBaselineTrue("project-a"))
+                .thenReturn(Optional.of(existing));
 
-        when(contractRepository.findByVersion("1.0.0")).thenReturn(Optional.of(v1));
-        when(contractRepository.findByVersion("2.0.0")).thenReturn(Optional.of(v2));
+        JsonNode breaking = schema(
+                "{\"type\":\"object\",\"required\":[],\"properties\":{\"name\":{\"type\":\"integer\"}}}");
+        GuardCheckResponse response = service.guardCheck("project-a", breaking);
 
-        GuardCheckResponse response = service.evaluateDeployment("1.0.0", "2.0.0");
         assertEquals(DeploymentDecision.BLOCK_DEPLOYMENT, response.getDecision());
-        assertTrue(response.getChanges().size() > 1, "Should collect multiple breaking changes");
+        assertTrue(response.getChanges().size() > 1, "Should report all changes, not just first");
     }
 
-    // ─── addContract ─────────────────────────────────────────────────────────
+    // ─── Project isolation ─────────────────────────────────────────────────────
 
     @Test
-    void shouldThrowWhenDuplicateVersionAdded() throws Exception {
-        ApiContract existing = buildContract("1.0.0",
-                """
-                {"type":"object","required":["name"],"properties":{"name":{"type":"string"}}}
-                """);
-        when(contractRepository.findByVersion("1.0.0")).thenReturn(Optional.of(existing));
+    void shouldIsolateDifferentProjects() throws Exception {
+        String schemaAJson = "{\"type\":\"object\",\"required\":[\"fieldA\"],\"properties\":{\"fieldA\":{\"type\":\"string\"}}}";
+        String schemaBJson = "{\"type\":\"object\",\"required\":[\"fieldB\"],\"properties\":{\"fieldB\":{\"type\":\"string\"}}}";
 
-        assertThrows(IllegalStateException.class, () -> service.addContract(existing));
+        ApiContract baselineA = baseline("project-a", schemaAJson);
+        when(contractRepository.findByProjectIdAndBaselineTrue("project-a"))
+                .thenReturn(Optional.of(baselineA));
+        when(contractRepository.findByProjectIdAndBaselineTrue("project-b"))
+                .thenReturn(Optional.empty());
+
+        // Project B has no baseline → SAFE (first schema)
+        GuardCheckResponse responseB = service.guardCheck("project-b", schema(schemaBJson));
+        assertEquals(DeploymentDecision.SAFE_TO_DEPLOY, responseB.getDecision());
+
+        // Project A baseline should never be touched for project-b operation
+        verify(contractRepository).findByProjectIdAndBaselineTrue("project-b");
+        verify(contractRepository, never()).findByProjectIdAndBaselineTrue("project-a");
     }
 
     @Test
-    void shouldThrowWhenSchemaInvalid() throws Exception {
-        ApiContract bad = new ApiContract();
-        bad.setVersion("1.0.0");
-        bad.setSchema(objectMapper.readTree("""
-                {"noType": true, "required": []}
-                """));
+    void shouldAllowSameVersionInDifferentProjects() throws Exception {
+        String schemaJson = "{\"type\":\"object\",\"required\":[\"name\"],\"properties\":{\"name\":{\"type\":\"string\"}}}";
 
-        assertThrows(IllegalArgumentException.class, () -> service.addContract(bad));
+        ApiContract contractA = new ApiContract();
+        contractA.setProjectId("project-a");
+        contractA.setVersion("1.0.0");
+        contractA.setSchema(objectMapper.readTree(schemaJson));
+        contractA.setBaseline(false);
+        contractA.setCreatedAt(LocalDateTime.now());
+
+        when(contractRepository.findByProjectIdAndVersion("project-a", "1.0.0"))
+                .thenReturn(Optional.empty());
+        when(contractRepository.findByProjectIdAndBaselineTrue("project-a"))
+                .thenReturn(Optional.empty());
+
+        // Should not throw — same version in different project is allowed
+        assertDoesNotThrow(() -> service.addContract(contractA));
+    }
+
+    // ─── Invalid schema ────────────────────────────────────────────────────────
+
+    @Test
+    void shouldThrowOnInvalidSchema() throws Exception {
+        JsonNode bad = schema("{\"noType\": true, \"required\": []}");
+        assertThrows(IllegalArgumentException.class,
+                () -> service.guardCheck("project-a", bad));
+    }
+
+    // ─── Accept (force baseline) ───────────────────────────────────────────────
+
+    @Test
+    void shouldForceAcceptSchemaAsBaseline() throws Exception {
+        ApiContract existing = baseline("project-a",
+                "{\"type\":\"object\",\"required\":[\"name\"],\"properties\":{\"name\":{\"type\":\"string\"}}}");
+        when(contractRepository.findByProjectIdAndBaselineTrue("project-a"))
+                .thenReturn(Optional.of(existing));
+
+        JsonNode breaking = schema(
+                "{\"type\":\"object\",\"required\":[],\"properties\":{}}");
+        assertDoesNotThrow(() -> service.acceptContract("project-a", breaking));
+
+        // Old baseline unset + new baseline saved = 2 saves
+        verify(contractRepository, times(2)).save(any(ApiContract.class));
     }
 }

@@ -17,6 +17,9 @@ public class GuardAuditLog {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "project_id", nullable = false)
+    private String projectId;
+
     @Column(nullable = false)
     private String fromVersion;
 
@@ -33,11 +36,11 @@ public class GuardAuditLog {
     @Column(nullable = false)
     private LocalDateTime checkedAt;
 
-    // Required by JPA
     protected GuardAuditLog() {}
 
-    // Used by ContractService
-    public GuardAuditLog(String fromVersion, String toVersion, DeploymentDecision decision, String reason) {
+    public GuardAuditLog(String projectId, String fromVersion, String toVersion,
+                         DeploymentDecision decision, String reason) {
+        this.projectId = projectId;
         this.fromVersion = fromVersion;
         this.toVersion = toVersion;
         this.decision = decision;

@@ -1,128 +1,153 @@
 # APIGuard 🛡️
 
-> A self-hosted API contract validation microservice. Detects breaking changes between API schema versions before deployment and blocks them automatically in your CI/CD pipeline.
+> A self-hosted API contract validation service. One instance, many projects. Detects breaking changes automatically and blocks bad deployments in CI/CD.
 
 ---
 
 ## How It Works
 
 ```
-You upload v1.0.0 schema  →  stored in your database
-You upload v2.0.0 schema  →  stored in your database
-POST /guard/check          →  APIGuard compares both
-                           →  returns SAFE / WARN / BLOCK
+POST /guard/check  { projectId, schema }
+         ↓
+No baseline exists?  →  store schema as baseline  →  SAFE_TO_DEPLOY
+Baseline exists?     →  compare against baseline
+                     →  SAFE_TO_DEPLOY  →  new schema becomes baseline
+                     →  WARN_ONLY       →  new schema becomes baseline
+                     →  BLOCK_DEPLOYMENT →  old baseline kept, pipeline fails
 ```
 
 | Decision | Meaning |
 |---|---|
 | `SAFE_TO_DEPLOY` | No changes — fully backward compatible |
-| `WARN_ONLY` | New fields added — proceed with caution |
-| `BLOCK_DEPLOYMENT` | Breaking changes — deployment blocked |
+| `WARN_ONLY` | New fields added — non-breaking, baseline updated |
+| `BLOCK_DEPLOYMENT` | Breaking changes — baseline unchanged |
+
+---
+
+## One Instance, Many Projects
+
+```
+APIGuard  +  PostgreSQL
+              │
+    ┌─────────┼─────────┐
+    ▼         ▼         ▼
+ project-a  project-b  project-c
+ (isolated) (isolated) (isolated)
+```
+
+Each project has its own independent baseline. Projects never compare against each other.
 
 ---
 
 ## Prerequisites
 
-- Docker and Docker Compose installed
-- That's it
+- Docker and Docker Compose
 
 ---
 
 ## Setup (5 minutes)
 
-### 1. Clone the repo
-
 ```bash
-git clone https://github.com/wizdomic/APIVersionShield.git
-```
-
-### 2. Create your environment file
-
-```bash
+git clone https://github.com/YOUR_USERNAME/apiguard.git
+cd apiguard
 cp .env.example .env
 ```
 
-### 3. Open `.env` and fill in your values
+Edit `.env`:
 
 ```env
 DB_URL=jdbc:postgresql://db:5432/apiguard
 DB_USERNAME=postgres
-DB_PASSWORD=your-strong-password-here
+DB_PASSWORD=your-strong-password
 DB_DRIVER=org.postgresql.Driver
 DB_DIALECT=org.hibernate.dialect.PostgreSQLDialect
-APIGUARD_API_KEY=your-secret-api-key-here
+APIGUARD_API_KEY=your-secret-api-key
 ```
-
-> **DB_URL** — keep it exactly as above if using Docker Compose. It points to the Postgres container.
->
-> **DB_PASSWORD** — choose any strong password.
->
-> **APIGUARD_API_KEY** — choose any secret string. This is what protects your API endpoints. Share it only with your team and CI/CD pipeline.
-
-### 4. Start the app
 
 ```bash
 docker-compose up --build
 ```
 
-That's it. APIGuard is running at `http://localhost:8080`
+App runs at `http://localhost:8080`
 
 ---
 
-## Verify It's Working
+## CI/CD Integration
 
-Open Swagger UI:
+Add `api-schema.json` to your project root:
 
+```json
+{
+  "type": "object",
+  "required": ["userId", "email"],
+  "properties": {
+    "userId": {"type": "string"},
+    "email": {"type": "string", "format": "email"}
+  }
+}
 ```
-http://localhost:8080/swagger-ui/index.html
+
+Add to your GitHub Actions pipeline:
+
+```yaml
+- name: API Contract Guard
+  env:
+    APIGUARD_URL: ${{ secrets.APIGUARD_URL }}
+    APIGUARD_API_KEY: ${{ secrets.APIGUARD_API_KEY }}
+  run: |
+    RESULT=$(curl -s -X POST "$APIGUARD_URL/guard/check" \
+      -H "X-API-Key: $APIGUARD_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "projectId": "your-project-name",
+        "schema": '"$(cat api-schema.json)"'
+      }')
+
+    echo "$RESULT"
+    DECISION=$(echo "$RESULT" | jq -r '.decision')
+
+    if [ "$DECISION" = "BLOCK_DEPLOYMENT" ]; then
+      echo "❌ Breaking API changes detected — deployment blocked"
+      echo "$RESULT" | jq '.changes'
+      exit 1
+    fi
+
+    echo "✅ $DECISION — safe to deploy"
 ```
 
-Click **Authorize** → enter your `APIGUARD_API_KEY` → **Authorize** → **Close**
+GitHub Secrets to configure:
+
+| Secret | Value |
+|---|---|
+| `APIGUARD_URL` | where APIGuard is running |
+| `APIGUARD_API_KEY` | same as your `.env` |
+
+That's it. No version management. No `CURRENT_VERSION`. APIGuard handles the baseline internally.
 
 ---
 
-## Using the API
+## API Reference
 
-All requests require the header:
+All endpoints require `X-API-Key` header.
+
+### Guard Check (main endpoint)
+
 ```
-X-API-Key: your-secret-api-key-here
+POST /guard/check
 ```
 
----
-
-### Upload a contract
-
-```bash
-curl -X POST http://localhost:8080/contracts/upload \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-secret-api-key-here" \
-  -d '{
-    "version": "1.0.0",
-    "schema": {
-      "type": "object",
-      "required": ["userId", "email"],
-      "properties": {
-        "userId": {"type": "string"},
-        "email": {"type": "string", "format": "email"}
-      }
+```json
+{
+  "projectId": "project-a",
+  "schema": {
+    "type": "object",
+    "required": ["userId", "email"],
+    "properties": {
+      "userId": {"type": "string"},
+      "email": {"type": "string", "format": "email"}
     }
-  }'
-```
-
-Response: `201 Created`
-
----
-
-### Run a guard check
-
-```bash
-curl -X POST http://localhost:8080/guard/check \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-secret-api-key-here" \
-  -d '{
-    "from": "1.0.0",
-    "to": "2.0.0"
-  }'
+  }
+}
 ```
 
 Response:
@@ -130,81 +155,81 @@ Response:
 {
   "decision": "BLOCK_DEPLOYMENT",
   "reason": "Breaking changes detected",
-  "changes": [
-    "Required field removed: 'email'",
-    "Property removed: 'email'"
-  ]
+  "changes": ["Property removed: 'email'"]
 }
 ```
 
 ---
 
-### List all contracts
+### Force Accept a Breaking Change
 
-```bash
-curl http://localhost:8080/contracts \
-  -H "X-API-Key: your-secret-api-key-here"
+When you intentionally want a breaking schema to become the new baseline:
+
+```
+POST /contracts/accept
+```
+
+```json
+{
+  "projectId": "project-a",
+  "schema": { ... }
+}
 ```
 
 ---
 
-### View audit log
+### Manual Contract Upload
 
-```bash
-curl http://localhost:8080/guard/audit \
-  -H "X-API-Key: your-secret-api-key-here"
+```
+POST /contracts/upload
+```
+
+```json
+{
+  "projectId": "project-a",
+  "version": "1.0.0",
+  "schema": { ... }
+}
 ```
 
 ---
 
-## CI/CD Integration (GitHub Actions)
+### List Contracts
 
-Add this to your pipeline at `.github/workflows/deploy.yml`:
-
-```yaml
-- name: Upload new contract
-  run: |
-    curl -s -X POST ${{ secrets.APIGUARD_URL }}/contracts/upload \
-      -H "Content-Type: application/json" \
-      -H "X-API-Key: ${{ secrets.APIGUARD_API_KEY }}" \
-      -d '{
-        "version": "${{ github.ref_name }}",
-        "schema": '"$(cat src/main/resources/api-schema.json)"'
-      }'
-
-- name: Guard check — block breaking changes
-  run: |
-    RESULT=$(curl -s -X POST ${{ secrets.APIGUARD_URL }}/guard/check \
-      -H "Content-Type: application/json" \
-      -H "X-API-Key: ${{ secrets.APIGUARD_API_KEY }}" \
-      -d '{
-        "from": "${{ secrets.CURRENT_VERSION }}",
-        "to": "${{ github.ref_name }}"
-      }')
-
-    DECISION=$(echo $RESULT | jq -r '.decision')
-
-    if [ "$DECISION" = "BLOCK_DEPLOYMENT" ]; then
-      echo "❌ Deployment blocked — breaking changes detected"
-      echo $RESULT | jq '.changes'
-      exit 1
-    fi
-
-    echo "✅ $DECISION — safe to deploy"
-
-- name: Deploy
-  run: echo "your deploy command here"
+```
+GET /contracts                     ← all contracts
+GET /contracts?projectId=project-a ← filtered by project
 ```
 
-### GitHub Secrets to configure
+---
 
-Go to your repo → **Settings** → **Secrets and variables** → **Actions** → add:
+### Validate a Payload
 
-| Secret | Value |
-|---|---|
-| `APIGUARD_URL` | `https://your-apiguard-domain.com` |
-| `APIGUARD_API_KEY` | same key as your `.env` |
-| `CURRENT_VERSION` | your current live version e.g. `1.0.0` |
+```
+POST /contracts/validate?projectId=project-a
+POST /contracts/validate?projectId=project-a&version=1.0.0
+```
+
+Validates a request payload against the project baseline (or a specific version).
+
+---
+
+### Audit Log
+
+```
+GET /guard/audit                     ← all checks
+GET /guard/audit?projectId=project-a ← filtered by project
+```
+
+---
+
+## Swagger UI
+
+```
+http://localhost:8080/swagger-ui/index.html
+```
+
+Click **Authorize** → enter your API key → test all endpoints.
 
 ---
 
@@ -222,36 +247,19 @@ Go to your repo → **Settings** → **Secrets and variables** → **Actions** �
 
 ---
 
-## Stopping the App
+## Multiple Projects on One Instance
 
-```bash
-docker-compose down
+```
+project-a → POST /guard/check  { "projectId": "project-a", "schema": ... }
+project-b → POST /guard/check  { "projectId": "project-b", "schema": ... }
+project-c → POST /guard/check  { "projectId": "project-c", "schema": ... }
 ```
 
-To also delete the database:
-
-```bash
-docker-compose down -v
-```
+All use the same APIGuard URL and API key. Baselines are completely isolated.
 
 ---
 
-## Environment Variables Reference
-
-| Variable | Description | Example |
-|---|---|---|
-| `DB_URL` | PostgreSQL connection URL | `jdbc:postgresql://db:5432/apiguard` |
-| `DB_USERNAME` | Database username | `postgres` |
-| `DB_PASSWORD` | Database password | `strongpassword` |
-| `DB_DRIVER` | JDBC driver class | `org.postgresql.Driver` |
-| `DB_DIALECT` | Hibernate dialect | `org.hibernate.dialect.PostgreSQLDialect` |
-| `APIGUARD_API_KEY` | Secret key for API auth | `my-secret-key` |
-
----
-
-## Using Your Own PostgreSQL (without Docker Compose DB)
-
-If you already have a PostgreSQL instance, update `.env`:
+## Using Your Own PostgreSQL (no Docker Compose DB)
 
 ```env
 DB_URL=jdbc:postgresql://your-host:5432/your-database
@@ -262,7 +270,7 @@ DB_PASSWORD=your-password
 Then run only the app container:
 
 ```bash
-docker run -p 8080:8080 --env-file .env apiguard
+docker run -p 8080:8080 --env-file .env yourusername/apiguard:latest
 ```
 
 ---
@@ -272,6 +280,28 @@ docker run -p 8080:8080 --env-file .env apiguard
 ```bash
 ./mvnw test
 ```
+
+---
+
+## Stop
+
+```bash
+docker-compose down       # stop containers
+docker-compose down -v    # stop + delete database volume
+```
+
+---
+
+## Environment Variables
+
+| Variable | Description |
+|---|---|
+| `DB_URL` | PostgreSQL JDBC URL |
+| `DB_USERNAME` | Database username |
+| `DB_PASSWORD` | Database password |
+| `DB_DRIVER` | `org.postgresql.Driver` |
+| `DB_DIALECT` | `org.hibernate.dialect.PostgreSQLDialect` |
+| `APIGUARD_API_KEY` | Secret key for all API requests |
 
 ---
 
