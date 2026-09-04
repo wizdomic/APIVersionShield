@@ -37,7 +37,7 @@ public class ContractService {
     this.objectMapper = objectMapper;
   }
 
-  // ─── Main Guard Check ──────────────────────────────────────────────────────
+  // Main Guard Check
 
   @Transactional
   public GuardCheckResponse guardCheck(String projectId, JsonNode schema) {
@@ -81,7 +81,7 @@ public class ContractService {
     return response;
   }
 
-  // ─── Force Accept Breaking Change ──────────────────────────────────────────
+  // Force Accept Breaking Change
 
   @Transactional
   public void acceptContract(String projectId, JsonNode schema) {
@@ -98,7 +98,7 @@ public class ContractService {
     log.info("Schema force-accepted as baseline for project: {}", projectId);
   }
 
-  // ─── Manual Upload (backward compat) ───────────────────────────────────────
+  // Manual Upload (backward compatible)
 
   @Transactional
   public void addContract(ApiContract contract) {
@@ -121,7 +121,7 @@ public class ContractService {
     log.info("Contract uploaded: project={} version={}", contract.getProjectId(), contract.getVersion());
   }
 
-  // ─── List Contracts ────────────────────────────────────────────────────────
+  // List Contracts
 
   @Transactional(readOnly = true)
   public Collection<ApiContract> getContracts(String projectId) {
@@ -131,7 +131,7 @@ public class ContractService {
     return repository.findAll();
   }
 
-  // ─── Payload Validation ────────────────────────────────────────────────────
+  // Payload Validation
 
   @Transactional(readOnly = true)
   public boolean validatePayload(String projectId, String version, String payload) throws Exception {
@@ -157,7 +157,7 @@ public class ContractService {
     return true;
   }
 
-  // ─── Audit Log (TEMPORARILY DISABLED) ─────────────────────────────────────
+  // Audit Log (TEMPORARILY DISABLED)
 
   /*
    * @Transactional(readOnly = true)
@@ -176,7 +176,7 @@ public class ContractService {
    * }
    */
 
-  // ─── Private Helpers ───────────────────────────────────────────────────────
+  // Private Helpers
 
   private GuardCheckResponse compareSchemas(JsonNode oldSchema, JsonNode newSchema) {
     List<String> breakingChanges = new ArrayList<>();
